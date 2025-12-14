@@ -140,13 +140,15 @@ def upsert_all(conn, zip_to_tdsp: Dict[str, Dict], plans_by_duns: Dict[str, List
                     """, (listing_id, ep.get("usage"), ep.get("price"), ep.get("actual"), ep.get("valid")))
 
                 for dl in (obj.get("document_links") or []):
+                    lang = dl.get("language") or "unknown"
                     cur.execute("""
                         INSERT INTO document_link (plan_listing_id, doc_type, language, link, snapshot_url)
                         VALUES (%s,%s,%s,%s,%s)
                         ON CONFLICT (plan_listing_id, doc_type, language) DO UPDATE SET
-                          link = EXCLUDED.link,
-                          snapshot_url = EXCLUDED.snapshot_url
-                    """, (listing_id, dl.get("type"), dl.get("language"), dl.get("link"), dl.get("snapshot_url")))
+                        link = EXCLUDED.link,
+                        snapshot_url = EXCLUDED.snapshot_url
+                    """, (listing_id, dl.get("type"), lang, dl.get("link"), dl.get("snapshot_url")))
+
 
     conn.commit()
 
