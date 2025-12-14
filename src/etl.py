@@ -161,13 +161,13 @@ def main():
 
     # ZIP -> TDSP
     for z in all_zips:
-    try:
-        tdsp = get_tdsp_for_zip(z)
-        zip_to_tdsp[z] = tdsp
-        duns_set.add(str(tdsp["DUNS"]))
-    except Exception as e:
-        print(f"ZIP lookup failed {z}: {e}")
-    time.sleep(0.15)
+        try:
+            tdsp = get_tdsp_for_zip(z)
+            zip_to_tdsp[z] = tdsp
+            duns_set.add(str(tdsp["DUNS"]))
+        except Exception as e:
+            print(f"ZIP lookup failed {z}: {e}")
+        time.sleep(0.15)
 
     if not duns_set:
         raise RuntimeError("No TDSP DUNS found from provided ZIPs. Check metros.json.")
