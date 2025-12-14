@@ -1,4 +1,3 @@
-@'
 CREATE TABLE IF NOT EXISTS tdsp (
   duns TEXT PRIMARY KEY,
   utility_id INTEGER,
@@ -59,4 +58,3 @@ CREATE TABLE IF NOT EXISTS zip_tdsp_map (
   duns TEXT REFERENCES tdsp(duns),
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-'@ | Out-File -Encoding utf8 sql\schema.sql

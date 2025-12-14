@@ -1,6 +1,2 @@
-# in repo root
-cat > requirements.txt << 'EOF'
 requests==2.32.3
 psycopg[binary]==3.2.6
-EOF
-
