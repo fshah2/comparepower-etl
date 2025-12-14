@@ -1,0 +1,9 @@
+@'
+{
+  "dfw": ["75201", "75001"],
+  "houston": ["77002", "77449"],
+  "san_antonio": ["78205"],
+  "austin": ["78701"],
+  "el_paso": ["79901"]
+}
+'@ | Out-File -Encoding utf8 metros.json
