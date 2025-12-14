@@ -30,7 +30,7 @@ def get_tdsp_for_zip(zip_code: str) -> Dict:
     r.raise_for_status()
     data = r.json()
     if not data:
-        raise ValueError(f"No TDSP data returned for ZIP {zip_code}")
+        raise ValueError(f"No TDSP data returned for ZIP {zip_code}. Response={data}")
     return data[0]
 
 def get_plans_for_duns(duns: str, group: str) -> List[Dict]:
@@ -161,10 +161,17 @@ def main():
 
     # ZIP -> TDSP
     for z in all_zips:
+    try:
         tdsp = get_tdsp_for_zip(z)
         zip_to_tdsp[z] = tdsp
         duns_set.add(str(tdsp["DUNS"]))
-        time.sleep(0.15)
+    except Exception as e:
+        print(f"ZIP lookup failed {z}: {e}")
+    time.sleep(0.15)
+
+    if not duns_set:
+        raise RuntimeError("No TDSP DUNS found from provided ZIPs. Check metros.json.")
+
 
     print(f"[{datetime.now()}] Unique DUNS: {len(duns_set)}")
 
