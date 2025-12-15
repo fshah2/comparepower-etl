@@ -15,14 +15,18 @@ ZIP_LOOKUP_URL = "https://comparepower.com/wp-admin/admin-ajax.php"
 PLANS_CURRENT_URL = "https://pricing.api.comparepower.com/api/plans/current"
 
 session = requests.Session()
-session.headers.update({
-    "accept": "application/json",
-    "user-agent": "Mozilla/5.0 (compatible; ComparePowerETL/1.0)",
-})
+session.headers.update(
+    {
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (compatible; ComparePowerETL/1.0)",
+    }
+)
+
 
 def load_metros(path: str) -> Dict[str, List[str]]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
 
 def get_tdsp_for_zip(zip_code: str) -> Dict:
     params = {"action": "search_zipcode", "zipCode": zip_code}
@@ -33,20 +37,31 @@ def get_tdsp_for_zip(zip_code: str) -> Dict:
         raise ValueError(f"No TDSP data returned for ZIP {zip_code}. Response={data}")
     return data[0]
 
+
 def get_plans_for_duns(duns: str, group: str) -> List[Dict]:
     params = {"group": group, "tdsp_duns": duns}
     r = session.get(PLANS_CURRENT_URL, params=params, timeout=60)
     r.raise_for_status()
     return r.json()
 
-def upsert_all(conn, zip_to_tdsp: Dict[str, Dict], plans_by_duns: Dict[str, List[Dict]], group: str) -> None:
+
+def upsert_all(
+    conn,
+    zip_to_tdsp: Dict[str, Dict],
+    plans_by_duns: Dict[str, List[Dict]],
+    group: str,
+) -> None:
     now = datetime.now(timezone.utc)
 
     with conn.cursor() as cur:
-        # TDSP + ZIP map
+        # -------------------------
+        # ZIP -> TDSP map + TDSP table
+        # -------------------------
         for z, tdsp in zip_to_tdsp.items():
-            duns = str(tdsp.get("DUNS"))
-            cur.execute("""
+            duns = str(tdsp.get("DUNS") or tdsp.get("duns") or tdsp.get("duns_number"))
+
+            cur.execute(
+                """
                 INSERT INTO tdsp (duns, utility_id, utility_name, state, last_seen_at)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (duns) DO UPDATE SET
@@ -54,20 +69,31 @@ def upsert_all(conn, zip_to_tdsp: Dict[str, Dict], plans_by_duns: Dict[str, List
                   utility_name = EXCLUDED.utility_name,
                   state = EXCLUDED.state,
                   last_seen_at = EXCLUDED.last_seen_at
-            """, (duns, tdsp.get("UtilityID"), tdsp.get("UtilityName"), tdsp.get("State"), now))
+                """,
+                (duns, tdsp.get("UtilityID"), tdsp.get("UtilityName"), tdsp.get("State"), now),
+            )
 
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO zip_tdsp_map (zip, duns, last_seen_at)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (zip) DO UPDATE SET
                   duns = EXCLUDED.duns,
                   last_seen_at = EXCLUDED.last_seen_at
-            """, (z, duns, now))
+                """,
+                (z, duns, now),
+            )
 
+        # -------------------------
         # Plans
+        # -------------------------
         for duns, plans in plans_by_duns.items():
             for obj in plans:
                 listing_id = obj.get("_id")
+                if not listing_id:
+                    # Defensive: skip malformed objects
+                    continue
+
                 prod = obj.get("product") or {}
                 brand = prod.get("brand") or {}
                 tdsp = obj.get("tdsp") or {}
@@ -76,26 +102,36 @@ def upsert_all(conn, zip_to_tdsp: Dict[str, Dict], plans_by_duns: Dict[str, List
                 product_id = prod.get("_id")
                 tdsp_duns = str(tdsp.get("duns_number") or tdsp.get("_id") or duns)
 
+                # Brand
                 if brand_id:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO brand (id, name, puct_number, legal_name)
                         VALUES (%s, %s, %s, %s)
                         ON CONFLICT (id) DO UPDATE SET
                           name = EXCLUDED.name,
                           puct_number = EXCLUDED.puct_number,
                           legal_name = EXCLUDED.legal_name
-                    """, (brand_id, brand.get("name"), brand.get("puct_number"), brand.get("legal_name")))
+                        """,
+                        (brand_id, brand.get("name"), brand.get("puct_number"), brand.get("legal_name")),
+                    )
 
-                cur.execute("""
+                # Ensure TDSP exists (plan payload can include name)
+                cur.execute(
+                    """
                     INSERT INTO tdsp (duns, utility_id, utility_name, state, last_seen_at)
                     VALUES (%s, NULL, %s, 'TX', %s)
                     ON CONFLICT (duns) DO UPDATE SET
                       utility_name = COALESCE(EXCLUDED.utility_name, tdsp.utility_name),
                       last_seen_at = EXCLUDED.last_seen_at
-                """, (tdsp_duns, tdsp.get("name"), now))
+                    """,
+                    (tdsp_duns, tdsp.get("name"), now),
+                )
 
+                # Product
                 if product_id:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO product (
                           id, brand_id, name, term, family, percent_green, headline,
                           early_termination_fee, description, is_pre_pay, is_time_of_use
@@ -112,14 +148,25 @@ def upsert_all(conn, zip_to_tdsp: Dict[str, Dict], plans_by_duns: Dict[str, List
                           description = EXCLUDED.description,
                           is_pre_pay = EXCLUDED.is_pre_pay,
                           is_time_of_use = EXCLUDED.is_time_of_use
-                    """, (
-                        product_id, brand_id, prod.get("name"), prod.get("term"), prod.get("family"),
-                        prod.get("percent_green"), prod.get("headline"),
-                        prod.get("early_termination_fee"), prod.get("description"),
-                        prod.get("is_pre_pay"), prod.get("is_time_of_use")
-                    ))
+                        """,
+                        (
+                            product_id,
+                            brand_id,
+                            prod.get("name"),
+                            prod.get("term"),
+                            prod.get("family"),
+                            prod.get("percent_green"),
+                            prod.get("headline"),
+                            prod.get("early_termination_fee"),
+                            prod.get("description"),
+                            prod.get("is_pre_pay"),
+                            prod.get("is_time_of_use"),
+                        ),
+                    )
 
-                cur.execute("""
+                # Listing
+                cur.execute(
+                    """
                     INSERT INTO plan_listing (id, product_id, tdsp_duns, grp, fetched_at)
                     VALUES (%s,%s,%s,%s,%s)
                     ON CONFLICT (id) DO UPDATE SET
@@ -127,32 +174,81 @@ def upsert_all(conn, zip_to_tdsp: Dict[str, Dict], plans_by_duns: Dict[str, List
                       tdsp_duns = EXCLUDED.tdsp_duns,
                       grp = EXCLUDED.grp,
                       fetched_at = EXCLUDED.fetched_at
-                """, (listing_id, product_id, tdsp_duns, group, now))
+                    """,
+                    (listing_id, product_id, tdsp_duns, group, now),
+                )
 
+                # Expected prices
                 for ep in (obj.get("expected_prices") or []):
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO expected_price (plan_listing_id, usage, price, actual, valid)
                         VALUES (%s,%s,%s,%s,%s)
                         ON CONFLICT (plan_listing_id, usage) DO UPDATE SET
                           price = EXCLUDED.price,
                           actual = EXCLUDED.actual,
                           valid = EXCLUDED.valid
-                    """, (listing_id, ep.get("usage"), ep.get("price"), ep.get("actual"), ep.get("valid")))
+                        """,
+                        (listing_id, ep.get("usage"), ep.get("price"), ep.get("actual"), ep.get("valid")),
+                    )
 
+                # Document links (language can be null from API -> store "unknown")
                 for dl in (obj.get("document_links") or []):
                     lang = dl.get("language") or "unknown"
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO document_link (plan_listing_id, doc_type, language, link, snapshot_url)
                         VALUES (%s,%s,%s,%s,%s)
                         ON CONFLICT (plan_listing_id, doc_type, language) DO UPDATE SET
-                        link = EXCLUDED.link,
-                        snapshot_url = EXCLUDED.snapshot_url
-                    """, (listing_id, dl.get("type"), lang, dl.get("link"), dl.get("snapshot_url")))
+                          link = EXCLUDED.link,
+                          snapshot_url = EXCLUDED.snapshot_url
+                        """,
+                        (
+                            listing_id,
+                            dl.get("type"),
+                            lang,
+                            dl.get("link"),
+                            dl.get("snapshot_url"),
+                        ),
+                    )
 
+                # -------------------------
+                # Components (NEW)
+                # Replace per listing: delete + insert to keep it consistent nightly
+                # -------------------------
+                components = obj.get("components") or []
+                cur.execute(
+                    "DELETE FROM plan_component WHERE plan_listing_id = %s",
+                    (listing_id,),
+                )
+
+                for idx, c in enumerate(components):
+                    cur.execute(
+                        """
+                        INSERT INTO plan_component (
+                          plan_listing_id, component_index,
+                          min_kwh, max_kwh, amount,
+                          multiplicative, tdsp_charge, compound, percentage
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        """,
+                        (
+                            listing_id,
+                            idx,
+                            c.get("min"),
+                            c.get("max"),
+                            c.get("amount"),
+                            c.get("multiplicative"),
+                            c.get("tdsp_charge"),
+                            c.get("compound"),
+                            c.get("percentage"),
+                        ),
+                    )
 
     conn.commit()
 
-def main():
+
+def main() -> None:
     metros = load_metros(METROS_PATH)
     all_zips = sorted({z for zs in metros.values() for z in zs})
 
@@ -169,26 +265,29 @@ def main():
             duns_set.add(str(tdsp["DUNS"]))
         except Exception as e:
             print(f"ZIP lookup failed {z}: {e}")
-        time.sleep(0.15)
-
-    if not duns_set:
-        raise RuntimeError("No TDSP DUNS found from provided ZIPs. Check metros.json.")
-
+        time.sleep(0.15)  # polite pacing
 
     print(f"[{datetime.now()}] Unique DUNS: {len(duns_set)}")
+
+    if not duns_set:
+        raise RuntimeError("No TDSP DUNS found from provided ZIPs. Check metros.json / crosswalk.")
 
     # DUNS -> plans/current
     plans_by_duns: Dict[str, List[Dict]] = {}
     for duns in sorted(duns_set):
-        plans = get_plans_for_duns(duns, GROUP)
-        plans_by_duns[duns] = plans
-        print(f"DUNS {duns}: {len(plans)} plans")
+        try:
+            plans = get_plans_for_duns(duns, GROUP)
+            plans_by_duns[duns] = plans
+            print(f"DUNS {duns}: {len(plans)} plans")
+        except Exception as e:
+            print(f"Plans fetch failed {duns}: {e}")
         time.sleep(0.25)
 
     with psycopg.connect(DATABASE_URL) as conn:
         upsert_all(conn, zip_to_tdsp, plans_by_duns, GROUP)
 
     print(f"[{datetime.now()}] Done.")
+
 
 if __name__ == "__main__":
     main()
