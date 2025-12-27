@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     # Runs at 08:17 UTC daily (GitHub schedules are UTC)
-    - cron: "17 8 * * *"
+    - cron: "17 8 * * 2"
 
 jobs:
   etl:
